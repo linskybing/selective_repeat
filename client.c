@@ -1,5 +1,8 @@
 #include "lab.h"
 
+Packet* packets = NULL;
+size_t count = 0;
+
 void enterServerInfo(char *serverIP, unsigned short *serverPort) {
     printf("═══ Enter Server Info ═══\n");
     printf("Server IP: ");
@@ -57,39 +60,50 @@ bool isLoss(double p) {
 }
 
 void recvFile(char *buffer) {
-    Packet packet;
-    memset(&packet, 0, sizeof(packet));
     // Keep track of the current sequence number
+    Packet p;
+
+    memset(&p, 0, sizeof(p));
+
     unsigned int seq = 0;
-    int offset = 0;
     time_t start, end;
     start = time(NULL);
     while (true) {
         // Receive a packet first, then use isLoss()
         // to simulate if it has packet loss
-        recvfrom(sockfd, &packet, sizeof(packet), 0, (struct sockaddr *)&serverInfo, (socklen_t *)&addrlen);
+        memset(&p, 0, sizeof(p));
+        
+        recvfrom(sockfd, &p, sizeof(p), 0, (struct sockaddr *)&serverInfo, (socklen_t *)&addrlen);
         // Simulate packet loss
         if (isLoss(LOSS_RATE)) {
             printf("Oops! Packet loss!\n");
             continue;
         }
 
-        printf("Received SEQ = %u\n", packet.header.seq);
+        printf("Received SEQ = %u\n", p.header.seq);
 
-        // Send an acknowledgement for the received packet
-        sendAck(seq);
-        // Copy the packet data into the buffer
-        // Use memcpy() instead of strncpy() since the file
-        // may contain 0x00 (interpreted as a null terminator)
-        memcpy(buffer + offset, packet.data, packet.header.size);
-        offset += packet.header.size;
-        // Increment the sequence number
-        seq++;
-        // If the packet is the last one, break out of the loop
-        if (packet.header.isLast) {
-            break;
+        if (p.header.seq < seq + WINDOW_SIZE){
+            sendAck(p.header.seq);
+            
+            if (p.header.seq >= seq) {
+                packets[p.header.seq] = p;
+            }
+
+            if (p.header.seq == seq) {
+                seq++;
+
+                if(p.header.isLast) break;
+            }
         }
+        
     }
+
+    int offset = 0;
+    for (int i = 0; i < seq; i++) {
+        memcpy(buffer + offset, packets[i].data, packets[i].header.size);
+        offset += packets[i].header.size;
+    }
+
     end = time(NULL);
     printf("Elapsed: %ld sec\n", end - start);
 }
@@ -163,6 +177,8 @@ int main() {
             printf("File size is %zu bytes\n", filesize);
             // Allocate a buffer with the file size
             char *buffer = malloc(filesize);
+            count = filesize / 1024 + 1;
+            packets = malloc(count * sizeof(Packet));
 
             printf("═══════ Receiving ═══════\n");
             recvFile(buffer);

@@ -7,9 +7,9 @@
       "request": "launch",
       "args": [],
       "stopAtEntry": false,
-      "externalConsole": true,
-      "cwd": "c:/Users/LIN/Desktop/selective",
-      "program": "c:/Users/LIN/Desktop/selective/build/Debug/outDebug",
+      "externalConsole": false,
+      "cwd": "/Users/linbinghong/Desktop/selective_repeat",
+      "program": "/Users/linbinghong/Desktop/selective_repeat/build/Debug/outDebug",
       "MIMode": "gdb",
       "miDebuggerPath": "gdb",
       "setupCommands": [

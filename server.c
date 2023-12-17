@@ -1,4 +1,12 @@
 #include "lab.h"
+#include <pthread.h>
+#include <unistd.h>
+
+bool* flag = NULL;
+int base = 0;
+bool run = true;
+
+pthread_mutex_t sendMutex = PTHREAD_MUTEX_INITIALIZER;
 
 void printServerInfo(unsigned short port) {
     printf("═══════ Server ═══════\n");
@@ -44,69 +52,91 @@ size_t getFileSize(FILE *fd) {
     return size;
 }
 
-
-void sendFile(FILE *fd) {
-    Packet send, recv;
-    // Set all fields in the packet to 0, including header.seq, header.ack,
-    // header.size, header.isLast, and data payload fields
-    memset(&send, 0, sizeof(send));
-    memset(&recv, 0, sizeof(recv));
-
-    // Determine the size of the file
-    size_t filesize = getFileSize(fd);
-
-    // Keep track of the current position in the file
-    // 0 --> 1024 --> 2048 --> ...
-    size_t current = 0;
-
-    // Loop through the file, sending packets until the entire file has been sent
-    while (current < filesize) {
-
-        // Seek to the "current" position in the file
-        fseek(fd, current, SEEK_SET);
-        // Read 1024 bytes from the file into the data field of the packet we will send
-        fread(send.data, 1, 1024, fd);
-        // Check if the current position indicates that the last packet is to be sent
-            // If it is, set the packet size to the remaining bytes in the file
-            // Set the isLast flag to true
-        // Otherwise
-        // Set the packet size to 1024
-        if (ftell(fd) == filesize) {
-            send.header.isLast = true;
-            send.header.size = ftell(fd) - current;
-        }
-        else {
-            send.header.size = 1024;
-        }
+void* timeout(Packet send) {
+    while(1) {
         printf("Send SEQ = %u\n", send.header.seq);
-        // Send the packet to the client
-        sendto(sockfd, &send, sizeof(send), 0, (struct sockaddr *)&clientInfo, sizeof(struct sockaddr_in));
-        // Wait for a response from the client using poll(..., TIMEOUT) with the POLLIN event
-        // Alternatively, set the timeout with setsockopt(..., SO_RCVTIMEO, ...) after creating the socket
-        struct pollfd ufds[1];
-        ufds[0].fd = sockfd;
-        ufds[0].events = POLLIN;
 
-        if (poll(ufds, 1, TIMEOUT) == 0) {
-            printf("Timeout! Resend!\n");
-            continue;
-        }  
-        // if (...) {
-        //     printf("Timeout! Resend!\n");
-        //     continue;
-        // }
+        sendto(sockfd, &send, sizeof(send), 0, (struct sockaddr *)&clientInfo, sizeof(struct sockaddr_in));
+
+        usleep(TIMEOUT*1000);
+
+        if (flag[send.header.seq]) return NULL;
+    } 
+
+    return NULL;
+}
+
+void* handleAck() {
+    Packet recv;
+    while(run) {
+
         recvfrom(sockfd, &recv, sizeof(recv), 0, NULL, NULL);
-        
         printf("Received ACK = %u\n", recv.header.ack);
 
-        // Update the current position in the file
-        current += send.header.size;
-        // Update the sequence number
-        send.header.seq++;
+        //critical section
+        pthread_mutex_lock(&sendMutex);
+
+        flag[recv.header.ack] = true;
+
+        if (recv.header.ack == base) {
+            for(int i = base; i < base + WINDOW_SIZE && flag[i]; i++, base++);
+        }
+
+        printf("Base = %d\n", base);
+        pthread_mutex_unlock(&sendMutex);
     }
+    return NULL;
+}
+
+void* sendFile(FILE *fd) {
+    size_t filesize = getFileSize(fd);
+    size_t current = 0;
+    const size_t count = filesize / 1024 + 1;
+    Packet* sendBuffer = malloc(sizeof(Packet) * (count));
+    flag = malloc(sizeof(bool) * (count));
+    memset(flag, false, count);
+
+    unsigned int seq = 0;
+    while (current < filesize) {
+
+        // critical section
+        pthread_mutex_lock(&sendMutex);
+        if (seq >= base + WINDOW_SIZE) {
+            pthread_mutex_unlock(&sendMutex);
+            continue;
+        }
+        pthread_mutex_unlock(&sendMutex);
+
+        fseek(fd, current, SEEK_SET);
+        fread(sendBuffer[seq].data, 1, 1024, fd);
+
+        sendBuffer[seq].header.seq = seq;
+
+        if (ftell(fd) == filesize) {
+            sendBuffer[seq].header.isLast = true;
+            sendBuffer[seq].header.size = ftell(fd) - current;
+        }
+        else {
+            sendBuffer[seq].header.size = 1024;
+        }
+
+        // create a thread
+        pthread_t* t = (pthread_t*) malloc(sizeof(pthread_t));
+
+        pthread_create(t, NULL, timeout, &sendBuffer[seq]);
+        pthread_detach(*t);
+
+        current += sendBuffer[seq].header.size;
+        seq++;
+
+    }
+
+    run = false;
+    return NULL;
 }
 
 int main(int argc, char **argv) {
+
     if (argc != 2) {
         fprintf(stderr, "Usage: %s <port>\n", argv[0]);
         exit(EXIT_FAILURE);
@@ -142,7 +172,12 @@ int main(int argc, char **argv) {
                 sendMessage(message);
 
                 printf("══════ Sending ═══════\n");
-                sendFile(fd);
+                pthread_t send_p, recv_p;
+                pthread_create(&send_p, NULL, sendFile, fd);
+                pthread_create(&recv_p, NULL, handleAck, NULL);
+                pthread_join(send_p, NULL);
+                pthread_join(recv_p, NULL);
+
                 printf("══════════════════════\n");
 
                 fclose(fd);
