@@ -1,6 +1,7 @@
 #include "lab.h"
 
 Packet* packets = NULL;
+bool* flag = NULL;
 size_t count = 0;
 
 void enterServerInfo(char *serverIP, unsigned short *serverPort) {
@@ -65,7 +66,7 @@ void recvFile(char *buffer) {
 
     memset(&p, 0, sizeof(p));
 
-    unsigned int seq = 0;
+    unsigned int base = 0;
     time_t start, end;
     start = time(NULL);
     while (true) {
@@ -81,25 +82,26 @@ void recvFile(char *buffer) {
         }
 
         printf("Received SEQ = %u\n", p.header.seq);
-
-        if (p.header.seq < seq + WINDOW_SIZE){
+        
+        if (p.header.seq < base + WINDOW_SIZE){
             sendAck(p.header.seq);
             
-            if (p.header.seq >= seq) {
+            if (p.header.seq >= base) {
                 packets[p.header.seq] = p;
+                flag[p.header.seq] = true;
             }
 
-            if (p.header.seq == seq) {
-                seq++;
-
-                if(p.header.isLast) break;
+            if (p.header.seq == base) {
+                for (int i = base; flag[i]; i++, base++);
+                if(base == count) break;
             }
         }
+        printf("Base = %d\n", base);
         
     }
 
     int offset = 0;
-    for (int i = 0; i < seq; i++) {
+    for (int i = 0; i < base; i++) {
         memcpy(buffer + offset, packets[i].data, packets[i].header.size);
         offset += packets[i].header.size;
     }
@@ -179,7 +181,8 @@ int main() {
             char *buffer = malloc(filesize);
             count = filesize / 1024 + 1;
             packets = malloc(count * sizeof(Packet));
-
+            flag = malloc(count * sizeof(bool));
+            memset(flag, false, count);
             printf("═══════ Receiving ═══════\n");
             recvFile(buffer);
             printf("═════════════════════════\n");

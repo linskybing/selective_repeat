@@ -3,10 +3,11 @@
 #include <unistd.h>
 
 bool* flag = NULL;
-int base = 0;
-bool run = true;
+pthread_t* send_thread = NULL;
 
-pthread_mutex_t sendMutex = PTHREAD_MUTEX_INITIALIZER;
+size_t base = 0;
+size_t count = 0;
+
 
 void printServerInfo(unsigned short port) {
     printf("═══════ Server ═══════\n");
@@ -52,15 +53,20 @@ size_t getFileSize(FILE *fd) {
     return size;
 }
 
+void killThread() {
+    for (int i = 0; i < count; i++) {
+        pthread_cancel(send_thread[i]);
+    }
+}
+
 void* timeout(Packet send) {
-    while(1) {
+    while(!flag[send.header.seq]) {
+
         printf("Send SEQ = %u\n", send.header.seq);
 
         sendto(sockfd, &send, sizeof(send), 0, (struct sockaddr *)&clientInfo, sizeof(struct sockaddr_in));
 
-        usleep(TIMEOUT*1000);
-
-        if (flag[send.header.seq]) return NULL;
+        usleep(TIMEOUT * 100);
     } 
 
     return NULL;
@@ -68,14 +74,11 @@ void* timeout(Packet send) {
 
 void* handleAck() {
     Packet recv;
-    while(run) {
-
+    while(base != count) {
         recvfrom(sockfd, &recv, sizeof(recv), 0, NULL, NULL);
         printf("Received ACK = %u\n", recv.header.ack);
 
         //critical section
-        pthread_mutex_lock(&sendMutex);
-
         flag[recv.header.ack] = true;
 
         if (recv.header.ack == base) {
@@ -83,29 +86,36 @@ void* handleAck() {
         }
 
         printf("Base = %d\n", base);
-        pthread_mutex_unlock(&sendMutex);
+
     }
+
     return NULL;
 }
 
-void* sendFile(FILE *fd) {
+void sendFile(FILE *fd) {
     size_t filesize = getFileSize(fd);
+
     size_t current = 0;
-    const size_t count = filesize / 1024 + 1;
+    count = filesize / 1024 + 1;
+
     Packet* sendBuffer = malloc(sizeof(Packet) * (count));
+    send_thread = (pthread_t*) malloc(sizeof(pthread_t) * count);
+
+    // ack record
     flag = malloc(sizeof(bool) * (count));
     memset(flag, false, count);
 
     unsigned int seq = 0;
+
+    // create receive thread
+    pthread_t recv_p;
+    pthread_create(&recv_p, NULL, handleAck, NULL);
+
     while (current < filesize) {
 
-        // critical section
-        pthread_mutex_lock(&sendMutex);
         if (seq >= base + WINDOW_SIZE) {
-            pthread_mutex_unlock(&sendMutex);
             continue;
         }
-        pthread_mutex_unlock(&sendMutex);
 
         fseek(fd, current, SEEK_SET);
         fread(sendBuffer[seq].data, 1, 1024, fd);
@@ -121,18 +131,27 @@ void* sendFile(FILE *fd) {
         }
 
         // create a thread
-        pthread_t* t = (pthread_t*) malloc(sizeof(pthread_t));
-
-        pthread_create(t, NULL, timeout, &sendBuffer[seq]);
-        pthread_detach(*t);
+        
+        pthread_create(&send_thread[seq], NULL, timeout, &sendBuffer[seq]);
+        pthread_detach(send_thread[seq]);
 
         current += sendBuffer[seq].header.size;
         seq++;
 
     }
+    pthread_join(recv_p, NULL);
+    killThread();
 
-    run = false;
-    return NULL;
+    // free
+    free(sendBuffer);
+    free(send_thread);
+    free(flag);
+
+    sendBuffer = NULL;
+    send_thread = NULL;
+    flag = NULL;
+    base = 0;
+    count = 0;
 }
 
 int main(int argc, char **argv) {
@@ -172,12 +191,7 @@ int main(int argc, char **argv) {
                 sendMessage(message);
 
                 printf("══════ Sending ═══════\n");
-                pthread_t send_p, recv_p;
-                pthread_create(&send_p, NULL, sendFile, fd);
-                pthread_create(&recv_p, NULL, handleAck, NULL);
-                pthread_join(send_p, NULL);
-                pthread_join(recv_p, NULL);
-
+                sendFile(fd);
                 printf("══════════════════════\n");
 
                 fclose(fd);
