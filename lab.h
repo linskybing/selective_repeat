@@ -14,7 +14,7 @@
 // gcc server.c -o server -pthread
 
 #define TIMEOUT 100
-#define LOSS_RATE 0.1
+#define LOSS_RATE 0.3
 #define WINDOW_SIZE 4
 
 /**
