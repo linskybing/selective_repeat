@@ -75,12 +75,13 @@ void* handleAck() {
         printf("Received ACK = %u\n", recv.header.ack);
 
         //critical section
+        pthread_mutex_trylock(&lock);
         flag[recv.header.ack] = true;
 
         if (recv.header.ack == base) {
             for(int i = base; i < base + WINDOW_SIZE && flag[i]; i++, base++);
         }
-
+        pthread_mutex_unlock(&lock);
     }
 
     return NULL;
@@ -128,7 +129,6 @@ void sendFile(FILE *fd) {
         // create a thread
         
         pthread_create(&send_thread[seq], NULL, timeout, &sendBuffer[seq]);
-        pthread_detach(send_thread[seq]);
 
         current += sendBuffer[seq].header.size;
         seq++;
