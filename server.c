@@ -4,6 +4,7 @@
 
 bool* flag = NULL;
 pthread_t* send_thread = NULL;
+pthread_mutex_t lock;
 
 size_t base = 0;
 size_t count = 0;
@@ -53,18 +54,13 @@ size_t getFileSize(FILE *fd) {
     return size;
 }
 
-void killThread() {
-    for (int i = 0; i < count; i++) {
-        pthread_cancel(send_thread[i]);
-    }
-}
+void* timeout(void* args) {
+    Packet* send = (Packet*) args;
+    while(!flag[send->header.seq]) {
 
-void* timeout(Packet send) {
-    while(!flag[send.header.seq]) {
+        printf("Send SEQ = %u\n", send->header.seq);
 
-        printf("Send SEQ = %u\n", send.header.seq);
-
-        sendto(sockfd, &send, sizeof(send), 0, (struct sockaddr *)&clientInfo, sizeof(struct sockaddr_in));
+        sendto(sockfd, send, sizeof(*send), 0, (struct sockaddr *)&clientInfo, sizeof(struct sockaddr_in));
 
         usleep(TIMEOUT * 100);
     } 
@@ -85,8 +81,6 @@ void* handleAck() {
             for(int i = base; i < base + WINDOW_SIZE && flag[i]; i++, base++);
         }
 
-        printf("Base = %d\n", base);
-
     }
 
     return NULL;
@@ -100,7 +94,8 @@ void sendFile(FILE *fd) {
 
     Packet* sendBuffer = malloc(sizeof(Packet) * (count));
     send_thread = (pthread_t*) malloc(sizeof(pthread_t) * count);
-
+    pthread_mutex_init(&lock, NULL);
+    
     // ack record
     flag = malloc(sizeof(bool) * (count));
     memset(flag, false, count);
@@ -139,9 +134,12 @@ void sendFile(FILE *fd) {
         seq++;
 
     }
-    pthread_join(recv_p, NULL);
-    killThread();
 
+    for (int i = 0; i < count; i++) {
+        pthread_join(send_thread[i], NULL);
+    }
+
+    pthread_join(recv_p, NULL);
     // free
     free(sendBuffer);
     free(send_thread);
